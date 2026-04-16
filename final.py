@@ -8,6 +8,27 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 
+# --------------------------------------------------
+# PDF REPORT
+# --------------------------------------------------
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
+from reportlab.lib.styles import getSampleStyleSheet
+
+def create_pdf_report(eda_text, model_text):
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate("march_madness_report.pdf")
+
+    content = []
+
+    content.append(Paragraph("March Madness Upset Analysis", styles["Title"]))
+    content.append(Spacer(1, 12))
+
+    content.append(Preformatted(eda_text, styles["Code"]))
+    content.append(Spacer(1, 12))
+    content.append(Preformatted(model_text, styles["Code"]))
+
+    doc.build(content)
+
 """
 CS152 Final Project Starter
 Built to match your uploaded files:
@@ -35,6 +56,19 @@ BASE_DIR = Path("data")
 MATCHUPS_FILE = BASE_DIR / "Tournament Matchups.csv"
 KENPOM_FILE = BASE_DIR / "KenPom Barttorvik.csv"
 
+
+# --------------------------------------------------
+# 1b. style
+# --------------------------------------------------
+def pretty_header(title):
+    print("\n" + "="*60)
+    print(title.upper())
+    print("="*60)
+
+
+def pretty_df(df, title, n=10):
+    pretty_header(title)
+    print(df.head(n).to_string(index=False))
 
 # --------------------------------------------------
 # 2. LOAD DATA
@@ -321,19 +355,32 @@ def add_difference_features(df: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------
 # 7. QUICK EDA
 # --------------------------------------------------
-def basic_upset_analysis(df: pd.DataFrame) -> None:
-    print("\nNumber of games:")
-    print(len(df))
+def basic_upset_analysis(df: pd.DataFrame):
+    output = []
 
-    print("\nOverall upset rate:")
-    print(df["Upset"].mean())
+    output.append("OVERALL STATS")
+    output.append(f"Total games: {len(df)}")
+    output.append(f"Upset rate: {df['Upset'].mean():.3f} ({df['Upset'].mean()*100:.1f}%)\n")
 
-    print("\nUpsets by round:")
-    print(df.groupby("CURRENT_ROUND")["Upset"].agg(["count", "mean"]))
+    round_df = df.groupby("CURRENT_ROUND")["Upset"].agg(["count", "mean"])
+    round_df["mean"] = (round_df["mean"] * 100).round(1)
 
-    print("\nUpsets by seed difference:")
-    print(df.groupby("SeedDiff")["Upset"].agg(["count", "mean"]).sort_index())
+    output.append("UPSETS BY ROUND")
+    output.append(round_df.to_string())
+    output.append("")
 
+    seed_df = df.groupby("SeedDiff")["Upset"].agg(["count", "mean"])
+    seed_df["mean"] = (seed_df["mean"] * 100).round(1)
+
+    output.append("UPSETS BY SEED DIFFERENCE")
+    output.append(seed_df.to_string())
+    output.append("")
+
+    # still print to terminal
+    for line in output:
+        print(line)
+
+    return "\n".join(output)
 
 # --------------------------------------------------
 # 8. MODEL
@@ -383,14 +430,18 @@ def build_model(df: pd.DataFrame):
     preds = pipeline.predict(X_test)
     probs = pipeline.predict_proba(X_test)[:, 1]
 
+    report = classification_report(y_test, preds)
+    cm = confusion_matrix(y_test, preds)
+    auc = roc_auc_score(y_test, probs)
+
     print("\nClassification report:")
-    print(classification_report(y_test, preds))
+    print(report)
 
     print("\nConfusion matrix:")
-    print(confusion_matrix(y_test, preds))
+    print(cm)
 
     print("\nROC-AUC:")
-    print(roc_auc_score(y_test, probs))
+    print(auc)
 
     coefs = pipeline.named_steps["model"].coef_[0]
     coef_df = pd.DataFrame({
@@ -401,7 +452,23 @@ def build_model(df: pd.DataFrame):
     print("\nFeature coefficients:")
     print(coef_df)
 
-    return pipeline, coef_df
+    model_text = f"""
+MODEL PERFORMANCE
+
+Classification Report:
+{report}
+
+Confusion Matrix:
+{cm}
+
+ROC-AUC:
+{auc:.3f}
+
+Feature Coefficients:
+{coef_df.to_string(index=False)}
+"""
+
+    return pipeline, coef_df, y_test, preds, probs, model_text
 
 
 # --------------------------------------------------
@@ -421,14 +488,32 @@ def main():
     merged = merge_team_features(games_df, team_features)
     merged = add_difference_features(merged)
 
+    # --------------------------------------------------
+    # ADD CONFERENCE INFO
+    # --------------------------------------------------
+    team_with_conf = kenpom[["TEAM", "CONF", "YEAR"]]
+
+    merged = merged.merge(
+        team_with_conf,
+        left_on=["YEAR", "UnderdogTeam"],
+        right_on=["YEAR", "TEAM"],
+        how="left"
+    )
+
+    merged = merged.rename(columns={"CONF": "UnderdogConf"})
+    merged = merged.drop(columns=["TEAM"])
+
     print("\nGames preview:")
     print(games_df.head())
 
     print("\nMerged preview:")
     print(merged.head())
 
-    basic_upset_analysis(merged)
-    model, coef_df = build_model(merged)
+    eda_text = basic_upset_analysis(merged)
+
+    model, coef_df, y_test, preds, probs, model_text = build_model(merged)
+
+    create_pdf_report(eda_text, model_text)
 
     return merged, model, coef_df
 
