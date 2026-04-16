@@ -191,38 +191,55 @@ def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
             continue
 
         # Skip future/unplayed games (no score)
-        score_val = (
-            row_data.get("score")
-            or row_data.get("pts")
-            or row_data.get("home_pts")
-            or ""
-        )
+        # score_val = (
+        #     row_data.get("score")
+        #     or row_data.get("pts")
+        #     or row_data.get("home_pts")
+        #     or ""
+        # )
 
         # Determine teams. Sports-Reference conference schedule pages use:
         #   visitor_school_name  (away team)
         #   home_school_name     (home team)
         # or sometimes "road_team" / "home_team"
-        away_raw = (
-            row_data.get("visitor_school_name")
-            or row_data.get("road_team")
-            or row_data.get("away_team")
-            or ""
-        )
-        home_raw = (
-            row_data.get("home_school_name")
-            or row_data.get("home_team")
-            or ""
-        )
+        # away_raw = (
+        #     row_data.get("visitor_school_name")
+        #     or row_data.get("road_team")
+        #     or row_data.get("away_team")
+        #     or ""
+        # )
+        # home_raw = (
+        #     row_data.get("home_school_name")
+        #     or row_data.get("home_team")
+        #     or ""
+        # )
 
-        if not away_raw and not home_raw:
-            continue
+        # if not away_raw and not home_raw:
+        #     continue
 
-        away_team, away_rank = _split_rank(away_raw)
-        home_team, home_rank = _split_rank(home_raw)
+        away_team = row_data.get("visitor_school_name")
+        home_team = row_data.get("home_school_name")
+
+        # away_team, away_rank = _split_rank(away_raw)
+        # home_team, home_rank = _split_rank(home_raw)
+        # Prefer explicit rank columns if available
+        # away_rank = row_data.get("visitor_rank", "").strip()
+        # home_rank = row_data.get("home_rank", "").strip()
+
+        # # Fallback to parsing from name if needed
+        # away_team, parsed_away_rank = _split_rank(away_raw)
+        # home_team, parsed_home_rank = _split_rank(home_raw)
+
+        # if not away_rank:
+        #     away_rank = parsed_away_rank
+        # if not home_rank:
+        #     home_rank = parsed_home_rank
 
         # Scores
-        away_score = row_data.get("visitor_pts") or row_data.get("pts") or ""
-        home_score = row_data.get("home_pts") or ""
+        away_score = row_data.get("away_score")
+        home_score = row_data.get("home_score")
+        # away_score = row_data.get("visitor_pts", "").strip()
+        # home_score = row_data.get("home_pts", "").strip()
 
         # Neutral site flag: look for an 'N' in the game_location or notes column
         location = row_data.get("game_location") or row_data.get("location") or ""
@@ -233,9 +250,9 @@ def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
             "conference":  conf_name,
             "date":        date_val,
             "home_team":   home_team,
-            "home_rank":   home_rank,
+            # "home_rank":   home_rank,
             "away_team":   away_team,
-            "away_rank":   away_rank,
+            # "away_rank":   away_rank,
             "home_score":  home_score,
             "away_score":  away_score,
             "neutral":     neutral,
