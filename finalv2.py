@@ -3,6 +3,11 @@ import re
 import pandas as pd
 import numpy as np
 from pathlib import Path
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
@@ -13,19 +18,99 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 # --------------------------------------------------
 # PDF REPORT
 # --------------------------------------------------
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Preformatted, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
 
 
-def create_pdf_report(eda_text, model_text):
+REPORT_PDF_PATH = Path("march_madness_report_cursor3.pdf")
+COEF_CHART_PATH = Path("upset_model_coefficients.png")
+
+# Human-readable y-axis labels for the coefficient chart (internal column names unchanged).
+_FEATURE_CHART_LABELS = {
+    "SeedDiff": "Seed diff",
+    "KADJ_EM_Diff": "KenPom adjusted efficiency margin diff",
+    "KADJ_O_Diff": "KenPom adjusted offensive efficiency diff",
+    "KADJ_D_Diff": "KenPom adjusted defensive efficiency diff",
+    "BADJ_EM_Diff": "BartTorvik adjusted efficiency margin diff",
+    "BARTHAG_Diff": "BartTorvik title odds (BARTHAG) diff",
+    "WIN_PCT_Diff": "Win percentage diff",
+    "EFG_Diff": "Effective field goal percentage diff",
+    "EFGD_Diff": "Opponent effective field goal % allowed diff",
+    "TOV_Diff": "Turnover rate diff",
+    "TOVD_Diff": "Opponent turnover rate forced diff",
+    "OREB_Diff": "Offensive rebound rate diff",
+    "DREB_Diff": "Defensive rebound rate diff",
+    "TWO_PT_Diff": "Two-point percentage diff",
+    "THREE_PT_Diff": "Three-point percentage diff",
+    "AST_Diff": "Assist rate diff",
+    "h2h_played": "H2H played (reg. season)",
+    "h2h_dog_win_flag": "H2H: underdog had better record",
+    "h2h_avg_margin": "H2H: average margin (signed)",
+    "h2h_dog_won_last": "H2H: underdog won most recent game",
+}
+
+
+def _feature_chart_label(feature: str) -> str:
+    if feature in _FEATURE_CHART_LABELS:
+        return _FEATURE_CHART_LABELS[feature]
+    return feature.replace("_", " ")
+
+
+def save_coefficient_chart(coef_df: pd.DataFrame, path: Path) -> tuple[Path, float]:
+    """
+    Horizontal bar chart of logistic-regression coefficients (x=0 at center).
+    Positive → higher log-odds of upset; negative → lower.
+    Returns (path, height/width aspect ratio of the figure).
+    """
+    df = coef_df.sort_values("Coefficient", ascending=True).reset_index(drop=True)
+    n = len(df)
+    fig_h = max(4.0, 0.36 * n)
+    fig, ax = plt.subplots(figsize=(8.0, fig_h))
+    y = np.arange(n)
+    coefs = df["Coefficient"].to_numpy()
+    colors = np.where(coefs >= 0.0, "#2ca02c", "#d62728")
+    ax.barh(y, coefs, color=colors, height=0.72, edgecolor="none")
+    ax.axvline(0.0, color="black", linewidth=0.9, zorder=3)
+    ax.set_yticks(y)
+    labels = [_feature_chart_label(f) for f in df["Feature"]]
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlabel("Coefficient (standardized features → log-odds of upset)")
+    ax.set_title("Feature impact on upset probability (logistic regression)")
+    ax.grid(axis="x", linestyle=":", alpha=0.5)
+    fig.tight_layout()
+    path = Path(path)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    aspect = fig.get_figheight() / fig.get_figwidth()
+    plt.close(fig)
+    return path, aspect
+
+
+def create_pdf_report(eda_text, model_text, chart_path=None, chart_aspect_ratio=None):
     styles = getSampleStyleSheet()
-    doc = SimpleDocTemplate("march_madness_report.pdf")
+    doc = SimpleDocTemplate(str(REPORT_PDF_PATH))
     content = []
     content.append(Paragraph("March Madness Upset Analysis", styles["Title"]))
     content.append(Spacer(1, 12))
     content.append(Preformatted(eda_text, styles["Code"]))
     content.append(Spacer(1, 12))
     content.append(Preformatted(model_text, styles["Code"]))
+    if chart_path is not None and chart_aspect_ratio is not None:
+        cp = Path(chart_path)
+        if cp.is_file():
+            content.append(PageBreak())
+
+            content.append(Spacer(1, 14))
+            content.append(
+                Paragraph(
+                    "Feature effects on upset probability (logistic regression)",
+                    styles["Heading2"],
+                )
+            )
+            content.append(Spacer(1, 8))
+            draw_w = 6.2 * inch
+            draw_h = draw_w * chart_aspect_ratio
+            content.append(RLImage(str(cp), width=draw_w, height=draw_h))
     doc.build(content)
 
 
@@ -156,12 +241,21 @@ def build_h2h_lookup(cbb: pd.DataFrame, all_tournament_teams: set) -> dict:
     if cbb.empty:
         return {}
 
-    cbb_teams_all = set(cbb["home_team"].unique()) | set(cbb["away_team"].unique())
-    cbb_norm_map  = {_normalize_team_name(t): t for t in cbb_teams_all}
+    cbb_teams_all = (
+        pd.concat([cbb["home_team"], cbb["away_team"]], ignore_index=True)
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+    cbb_norm_map = {}
+    for team_name in sorted(cbb_teams_all):
+        norm_name = _normalize_team_name(team_name)
+        # Keep first deterministic match for a normalized token.
+        cbb_norm_map.setdefault(norm_name, team_name)
 
     # Build KenPom -> CBB name mapping
     kenpom_to_cbb = {}
-    for kp_name in all_tournament_teams:
+    for kp_name in sorted(all_tournament_teams):
         if kp_name in _KENPOM_TO_CBB:
             kenpom_to_cbb[kp_name] = _KENPOM_TO_CBB[kp_name]
             continue
@@ -421,14 +515,24 @@ def basic_upset_analysis(df: pd.DataFrame):
     output.append(f"Total games: {len(df)}")
     output.append(f"Upset rate: {df['Upset'].mean():.3f} ({df['Upset'].mean()*100:.1f}%)\n")
 
-    round_df = df.groupby("CURRENT_ROUND")["Upset"].agg(["count", "mean"])
-    round_df["mean"] = (round_df["mean"] * 100).round(1)
+    round_df = (
+        df.groupby("CURRENT_ROUND")["Upset"]
+        .agg(total_games="count", upset_count="sum", upset_rate="mean")
+        .sort_index()
+    )
+    round_df["upset_count"] = round_df["upset_count"].astype(int)
+    round_df["upset_rate"] = (round_df["upset_rate"] * 100).round(1)
     output.append("UPSETS BY ROUND")
     output.append(round_df.to_string())
     output.append("")
 
-    seed_df = df.groupby("SeedDiff")["Upset"].agg(["count", "mean"])
-    seed_df["mean"] = (seed_df["mean"] * 100).round(1)
+    seed_df = (
+        df.groupby("SeedDiff")["Upset"]
+        .agg(total_games="count", upset_count="sum", upset_rate="mean")
+        .sort_index()
+    )
+    seed_df["upset_count"] = seed_df["upset_count"].astype(int)
+    seed_df["upset_rate"] = (seed_df["upset_rate"] * 100).round(1)
     output.append("UPSETS BY SEED DIFFERENCE")
     output.append(seed_df.to_string())
     output.append("")
@@ -519,9 +623,6 @@ def build_model(df: pd.DataFrame):
         "Feature": feature_cols, "Coefficient": coefs
     }).sort_values("Coefficient", key=np.abs, ascending=False)
 
-    print("\nFeature coefficients:")
-    print(coef_df)
-
     model_text = f"""
 MODEL PERFORMANCE
 
@@ -533,9 +634,6 @@ Confusion Matrix:
 
 ROC-AUC:
 {auc:.3f}
-
-Feature Coefficients:
-{coef_df.to_string(index=False)}
 """
     return pipeline, coef_df, y_test, preds, probs, model_text
 
@@ -603,7 +701,9 @@ def main():
     eda_text = basic_upset_analysis(merged)
     model, coef_df, y_test, preds, probs, model_text = build_model(merged)
 
-    create_pdf_report(eda_text, model_text)
+    chart_path, chart_aspect = save_coefficient_chart(coef_df, COEF_CHART_PATH)
+    print(f"\nSaved coefficient chart: {chart_path.resolve()}")
+    create_pdf_report(eda_text, model_text, chart_path=chart_path, chart_aspect_ratio=chart_aspect)
 
     return merged, model, coef_df
 
