@@ -1,0 +1,37 @@
+CS152 Final Project: March Madness Upset Predictor
+Marielle Cibella & Brendan Graziani
+
+Submitted files:
+mmcsv directory
+- Tournament Matchups.csv
+- KenPom Barttorvik.csv
+cbb_data
+- 2009-2025.csv
+Scripts
+- final.py
+- scraper.py
+
+How to run:
+1. Unzip data.zip (should obtain )
+2. Run final.py
+    a. Output is a PDF containing the report and a .png for the coefficient graph
+
+Note: all data is provided, but you can run scraper.py if you'd like - takes about two hours :)
+
+What this code does:
+1. Loads the tournament matchup bracket data
+2. Converts data into many rows, each containing one tournament game
+3. Identifies the favorite and underdog by seed
+4. Creates the target variable: upset = 1 if the underdog wins
+5. Merges in KenPom/Barttorvik team features
+6. Builds a logistic regression model to predict upsets
+7. Evaluates model on different performance metrics
+8. Outputs PDF report and .png of coefficient graph
+
+(Non-obvious) Definitions from PDF:
+F1 Score:       ML evaluation metric that measures the classification model's 
+                accuracy
+Support:        Total number of true occurrences of a class in the dataset
+Macro Average:  The unweighted mean of a metric
+ROC-AUC:        Performance metric for binary classification models that 
+                measures their ability to distinguish between classes

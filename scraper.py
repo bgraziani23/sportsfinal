@@ -1,30 +1,3 @@
-"""
-NCAA Men's Basketball Scraper — Sports-Reference.com
-=====================================================
-Scrapes regular-season game results (2008-09 through 2025-26) by:
-  1. Visiting each season summary page to discover all conferences
-  2. Visiting each conference's schedule page to parse games
-  3. Writing one CSV per season (e.g. 2009.csv, 2010.csv, ..., 2026.csv)
-
-Output columns:
-    season, conference, date, home_team, home_rank,
-    away_team, away_rank, home_score, away_score, neutral
-
-Rate limit: Sports-Reference enforces ~10 requests/min.
-This script sleeps 7 seconds between requests to stay safe.
-
-Usage:
-    pip install requests beautifulsoup4
-    python scrape_cbb.py
-
-Notes:
-  - Sports-Reference uses "end year" for seasons (2008-09 => 2009).
-  - Schedule tables show the home team on the RIGHT column in most
-    conference schedules, with an @ symbol indicating the away team.
-  - Ranks appear as "(#N)" next to team names when the team was ranked.
-  - A 'N' in the game notes column indicates a neutral-site game.
-"""
-
 import csv
 import os
 import re
@@ -35,7 +8,9 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
 
 START_YEAR  = 2009   # 2008-09 season
 END_YEAR    = 2026   # 2025-26 season
@@ -50,7 +25,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── HTTP helper ───────────────────────────────────────────────────────────────
+# --------------------------------------------------
+# HTTP Helper
+# --------------------------------------------------
 
 SESSION = requests.Session()
 SESSION.headers.update({
@@ -60,8 +37,8 @@ SESSION.headers.update({
     )
 })
 
+# Fetch URL and return a BeautifulSoup object
 def get(url: str) -> BeautifulSoup | None:
-    """Fetch a URL and return a BeautifulSoup object, or None on failure."""
     log.info("GET %s", url)
     try:
         resp = SESSION.get(url, timeout=30)
@@ -79,30 +56,14 @@ def get(url: str) -> BeautifulSoup | None:
     finally:
         time.sleep(REQUEST_DELAY)
 
-
-# ── Parsing helpers ───────────────────────────────────────────────────────────
+# --------------------------------------------------
+# Parsing helpers
+# --------------------------------------------------
 
 RANK_RE = re.compile(r"\((\d+)\)")
 
-def _split_rank(raw: str) -> tuple[str, str]:
-    """
-    Given a raw team string like '(3) Duke' or 'Duke', return
-    (team_name, rank_str) where rank_str is '' if unranked.
-    """
-    raw = raw.strip()
-    m = RANK_RE.search(raw)
-    rank = m.group(1) if m else ""
-    name = RANK_RE.sub("", raw).strip()
-    return name, rank
-
-
+# Scrape season summary page and get conferences
 def get_conferences_for_season(year: int) -> list[tuple[str, str]]:
-    """
-    Scrape the season summary page and return a list of
-    (conference_name, schedule_url) for every men's conference.
-    
-    URL pattern: /cbb/seasons/men/{year}.html
-    """
     url = f"{BASE_URL}/cbb/seasons/men/{year}.html"
     soup = get(url)
     if soup is None:
@@ -110,7 +71,6 @@ def get_conferences_for_season(year: int) -> list[tuple[str, str]]:
 
     conferences = []
 
-    # The conference links follow the pattern /cbb/conferences/{slug}/men/{year}.html
     conf_re = re.compile(r"/cbb/conferences/([^/]+)/men/\d+\.html")
     seen = set()
     for a in soup.find_all("a", href=conf_re):
@@ -127,17 +87,8 @@ def get_conferences_for_season(year: int) -> list[tuple[str, str]]:
     log.info("  Found %d conferences for %d.", len(conferences), year)
     return conferences
 
-
+# Parse a conference schedule page and return a list of game dicts
 def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
-    """
-    Parse a conference schedule page and return a list of game dicts.
-
-    Sports-Reference schedule tables have columns roughly like:
-        Date | Time | Home | (away indicated by @ prefix or separate col) | Score ...
-
-    The actual table id is typically "schedule".
-    Columns vary slightly; we detect them by header text.
-    """
     soup = get(url)
     if soup is None:
         return []
@@ -159,7 +110,7 @@ def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
         log.warning("  No schedule table found at %s", url)
         return []
 
-    # Parse header to map column names → indices
+    # Parse header to map column names -> indices
     headers = []
     thead = table.find("thead")
     if thead:
@@ -190,56 +141,12 @@ def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
         if not date_val or date_val.lower() in ("date", ""):
             continue
 
-        # Skip future/unplayed games (no score)
-        # score_val = (
-        #     row_data.get("score")
-        #     or row_data.get("pts")
-        #     or row_data.get("home_pts")
-        #     or ""
-        # )
-
-        # Determine teams. Sports-Reference conference schedule pages use:
-        #   visitor_school_name  (away team)
-        #   home_school_name     (home team)
-        # or sometimes "road_team" / "home_team"
-        # away_raw = (
-        #     row_data.get("visitor_school_name")
-        #     or row_data.get("road_team")
-        #     or row_data.get("away_team")
-        #     or ""
-        # )
-        # home_raw = (
-        #     row_data.get("home_school_name")
-        #     or row_data.get("home_team")
-        #     or ""
-        # )
-
-        # if not away_raw and not home_raw:
-        #     continue
-
         away_team = row_data.get("visitor_school_name")
         home_team = row_data.get("home_school_name")
-
-        # away_team, away_rank = _split_rank(away_raw)
-        # home_team, home_rank = _split_rank(home_raw)
-        # Prefer explicit rank columns if available
-        # away_rank = row_data.get("visitor_rank", "").strip()
-        # home_rank = row_data.get("home_rank", "").strip()
-
-        # # Fallback to parsing from name if needed
-        # away_team, parsed_away_rank = _split_rank(away_raw)
-        # home_team, parsed_home_rank = _split_rank(home_raw)
-
-        # if not away_rank:
-        #     away_rank = parsed_away_rank
-        # if not home_rank:
-        #     home_rank = parsed_home_rank
 
         # Scores
         away_score = row_data.get("away_score")
         home_score = row_data.get("home_score")
-        # away_score = row_data.get("visitor_pts", "").strip()
-        # home_score = row_data.get("home_pts", "").strip()
 
         # Neutral site flag: look for an 'N' in the game_location or notes column
         location = row_data.get("game_location") or row_data.get("location") or ""
@@ -250,9 +157,7 @@ def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
             "conference":  conf_name,
             "date":        date_val,
             "home_team":   home_team,
-            # "home_rank":   home_rank,
             "away_team":   away_team,
-            # "away_rank":   away_rank,
             "home_score":  home_score,
             "away_score":  away_score,
             "neutral":     neutral,
@@ -260,8 +165,6 @@ def parse_schedule_page(conf_name: str, year: int, url: str) -> list[dict]:
 
     return rows
 
-
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 FIELDNAMES = [
     "season", "conference", "date",
@@ -299,7 +202,7 @@ def main():
                 writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
                 writer.writeheader()
                 writer.writerows(all_games)
-            log.info("  ✅ Wrote %d games to %s", len(all_games), out_path)
+            log.info("  Wrote %d games to %s", len(all_games), out_path)
         else:
             log.warning("  No games collected for season %d.", year)
 
